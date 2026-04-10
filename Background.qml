@@ -1,56 +1,61 @@
 /*
-    SPDX-FileCopyrightText: 2016 Boudhayan Gupta <bgupta@kde.org>
+    SPDX-FileCopyrightText: 2016 David Edmundson <davidedmundson@kde.org>
+    SPDX-FileCopyrightText: 2022 Aleix Pol Gonzalez <aleixpol@kde.org>
 
     SPDX-License-Identifier: LGPL-2.0-or-later
 */
 
 import QtQuick
 
-FocusScope {
-    id: sceneBackground
+import org.kde.plasma.components as PlasmaComponents
+import org.kde.kirigami as Kirigami
 
-    property var sceneBackgroundType
-    property alias sceneBackgroundColor: sceneColorBackground.color
-    property alias sceneBackgroundImage: sceneImageBackground.source
+PlasmaComponents.ToolButton {
+    id: root
 
-    Rectangle {
-        id: sceneColorBackground
-        anchors.fill: parent
+    property int currentIndex: keyboard.currentLayout
+    onCurrentIndexChanged: keyboard.currentLayout = currentIndex
+
+    text: i18ndc("plasma-desktop-sddm-theme", "@action:button opens layout chooser %1 is current", "Keyboard Layout: %1", keyboard.layouts[currentIndex]?.longName ?? "")
+    visible: keyboard.layouts.length > 1
+
+    checkable: true
+    checked: menu.opened
+    onToggled: {
+        if (checked) {
+            menu.popup(root, 0, 0)
+        } else {
+            menu.dismiss()
+        }
     }
 
-    Image {
-        id: sceneImageBackground
-        anchors.fill: parent
-        sourceSize.width: parent.width
-        sourceSize.height: parent.height
-        fillMode: Image.PreserveAspectCrop
-        smooth: true;
-    }
+    signal keyboardLayoutChanged()
 
-    states: [
-        State {
-            name: "imageBackground"
-            when: sceneBackgroundType === "image"
-            PropertyChanges {
-                target: sceneColorBackground
-                visible: false
-            }
-            PropertyChanges {
-                target: sceneImageBackground
-                visible: true
-            }
-        },
-        State {
-            name: "colorBackground"
-            when: sceneBackgroundType !== "image"
-            PropertyChanges {
-                target: sceneColorBackground
-                visible: true
-            }
-            PropertyChanges {
-                target: sceneImageBackground
-                visible: false
+    PlasmaComponents.Menu {
+        id: menu
+        Kirigami.Theme.colorSet: Kirigami.Theme.Window
+        Kirigami.Theme.inherit: false
+
+        onAboutToShow: {
+            if (instantiator.model === null) {
+                let layouts = keyboard.layouts;
+                layouts.sort((a, b) => a.longName.localeCompare(b.longName));
+                instantiator.model = layouts;
             }
         }
-    ]
+
+        Instantiator {
+            id: instantiator
+            model: null
+            onObjectAdded: (index, object) => menu.insertItem(index, object)
+            onObjectRemoved: (index, object) => menu.removeItem(object)
+            delegate: PlasmaComponents.MenuItem {
+                text: modelData.longName
+                onTriggered: {
+                    keyboard.currentLayout = keyboard.layouts.indexOf(modelData)
+                    root.keyboardLayoutChanged()
+                }
+            }
+        }
+    }
 }
