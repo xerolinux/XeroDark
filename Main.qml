@@ -4,14 +4,14 @@
     SPDX-License-Identifier: LGPL-2.0-or-later
 */
 
-import QtQuick 2.15
-import QtQuick.Layouts 1.15
-import QtQuick.Controls 2.15 as QQC2
+import QtQuick
+import QtQuick.Layouts
+import QtQuick.Controls as QQC2
 import Qt5Compat.GraphicalEffects
 
-import org.kde.plasma.components 3.0 as PlasmaComponents3
+import org.kde.plasma.components as PlasmaComponents3
 import org.kde.plasma.private.keyboardindicator as KeyboardIndicator
-import org.kde.kirigami 2.20 as Kirigami
+import org.kde.kirigami as Kirigami
 
 import org.kde.breeze.components
 
@@ -30,7 +30,7 @@ Item {
 
     property string notificationMessage
 
-    LayoutMirroring.enabled: Qt.application.layoutDirection === Qt.RightToLeft
+    LayoutMirroring.enabled: Application.layoutDirection === Qt.RightToLeft
     LayoutMirroring.childrenInherit: true
 
     KeyboardIndicator.KeyState {
@@ -117,10 +117,12 @@ Item {
             anchors.fill: clock
             source: clock
             visible: !softwareRendering && config.showClock === "true"
-            radius: 6
-            samples: 14
-            spread: 0.3
-            color : "black" // shadows should always be black
+            radius: 7
+            verticalOffset: 0.8
+            samples: 15
+            spread: 0.2
+            color : Qt.rgba(0, 0, 0, 0.7)
+            opacity: loginScreenRoot.uiVisible ? 0 : 1
             Behavior on opacity {
                 OpacityAnimator {
                     duration: Kirigami.Units.veryLongDuration * 2
@@ -145,6 +147,9 @@ Item {
                 right: parent.right
             }
             height: root.height + Kirigami.Units.gridUnit * 3
+
+            // this isn't implicit, otherwise items still get processed for the scenegraph
+            visible: opacity > 0
 
             // If true (depends on the style and environment variables), hover events are always accepted
             // and propagation stopped. This means the parent MouseArea won't get them and the UI won't be shown.
@@ -192,7 +197,7 @@ Item {
                 notificationMessage: {
                     const parts = [];
                     if (capsLockState.locked) {
-                        parts.push(i18nd("plasma-desktop-sddm-theme", "Caps Lock is on"));
+                        parts.push(i18ndc("plasma-desktop-sddm-theme", "@info:status",  "Caps Lock is on"));
                     }
                     if (root.notificationMessage) {
                         parts.push(root.notificationMessage);
@@ -203,26 +208,32 @@ Item {
                 actionItemsVisible: !inputPanel.keyboardActive
                 actionItems: [
                     ActionButton {
+                        icon.name: "system-hibernate"
+                        text: i18ndc("plasma-desktop-sddm-theme", "Suspend to disk", "Hibernate")
+                        onClicked: sddm.hibernate()
+                        enabled: sddm.canHibernate
+                    },
+                    ActionButton {
                         icon.name: "system-suspend"
-                        text: i18ndc("plasma-desktop-sddm-theme", "Suspend to RAM", "Sleep")
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button Suspend to RAM", "Sleep")
                         onClicked: sddm.suspend()
                         enabled: sddm.canSuspend
                     },
                     ActionButton {
                         icon.name: "system-reboot"
-                        text: i18nd("plasma-desktop-sddm-theme", "Restart")
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "Restart")
                         onClicked: sddm.reboot()
                         enabled: sddm.canReboot
                     },
                     ActionButton {
                         icon.name: "system-shutdown"
-                        text: i18nd("plasma-desktop-sddm-theme", "Shut Down")
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "Shut Down")
                         onClicked: sddm.powerOff()
                         enabled: sddm.canPowerOff
                     },
                     ActionButton {
                         icon.name: "system-user-prompt"
-                        text: i18ndc("plasma-desktop-sddm-theme", "For switching to a username and password prompt", "Other…")
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button For switching to a username and password prompt", "Other…")
                         onClicked: mainStack.push(userPromptComponent)
                         visible: !userListComponent.showUsernamePrompt
                     }]
@@ -329,7 +340,7 @@ Item {
                     }
                     Component.onCompleted: {
                         // as we can't bind inside ListElement
-                        setProperty(0, "name", i18nd("plasma-desktop-sddm-theme", "Type in Username and Password"));
+                        setProperty(0, "name", i18ndc("plasma-desktop-sddm-theme", "@info:usagetip", "Type in Username and Password"));
                         setProperty(0, "icon", Qt.resolvedUrl("faces/.face.icon"))
                     }
                 }
@@ -343,25 +354,25 @@ Item {
                 actionItems: [
                     ActionButton {
                         icon.name: "system-suspend"
-                        text: i18ndc("plasma-desktop-sddm-theme", "Suspend to RAM", "Sleep")
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button Suspend to RAM", "Sleep")
                         onClicked: sddm.suspend()
                         enabled: sddm.canSuspend
                     },
                     ActionButton {
                         icon.name: "system-reboot"
-                        text: i18nd("plasma-desktop-sddm-theme", "Restart")
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "Restart")
                         onClicked: sddm.reboot()
                         enabled: sddm.canReboot
                     },
                     ActionButton {
                         icon.name: "system-shutdown"
-                        text: i18nd("plasma-desktop-sddm-theme", "Shut Down")
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "Shut Down")
                         onClicked: sddm.powerOff()
                         enabled: sddm.canPowerOff
                     },
                     ActionButton {
                         icon.name: "system-user-list"
-                        text: i18nd("plasma-desktop-sddm-theme", "List Users")
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "List Users")
                         onClicked: mainStack.pop()
                     }
                 ]
@@ -475,8 +486,6 @@ Item {
             SessionButton {
                 id: sessionButton
 
-                font.pointSize: config.fontSize
-
                 onSessionChanged: {
                     // Otherwise the password field loses focus and virtual keyboard
                     // keystrokes get eaten
@@ -497,16 +506,14 @@ Item {
                 Layout.fillWidth: true
             }
 
-            Battery {
-                fontSize: config.fontSize
-            }
+            Battery {}
         }
     }
 
     Connections {
         target: sddm
         function onLoginFailed() {
-            notificationMessage = i18nd("plasma_lookandfeel_org.kde.lookandfeel", "Login Failed")
+            notificationMessage = i18ndc("plasma-desktop-sddm-theme", "@info:status", "Login Failed")
             footer.enabled = true
             mainStack.enabled = true
             userListComponent.userList.opacity = 1
