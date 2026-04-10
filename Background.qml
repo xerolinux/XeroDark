@@ -1,157 +1,542 @@
-import org.kde.breeze.components
+/*
+    SPDX-FileCopyrightText: 2016 David Edmundson <davidedmundson@kde.org>
+
+    SPDX-License-Identifier: LGPL-2.0-or-later
+*/
 
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QQC2
+import Qt5Compat.GraphicalEffects
 
 import org.kde.plasma.components as PlasmaComponents3
-import org.kde.plasma.extras as PlasmaExtras
+import org.kde.plasma.private.keyboardindicator as KeyboardIndicator
 import org.kde.kirigami as Kirigami
 
-SessionManagementScreen {
+import org.kde.breeze.components
+
+Item {
     id: root
-    property Item mainPasswordBox: passwordBox
 
-    property bool showUsernamePrompt: !showUserList
+    // If we're using software rendering, draw outlines instead of shadows
+    // See https://bugs.kde.org/show_bug.cgi?id=398317
+    readonly property bool softwareRendering: GraphicsInfo.api === GraphicsInfo.Software
 
-    property string lastUserName
-    property bool loginScreenUiVisible: false
+    Kirigami.Theme.colorSet: Kirigami.Theme.Complementary
+    Kirigami.Theme.inherit: false
 
-    //the y position that should be ensured visible when the on screen keyboard is visible
-    property int visibleBoundary: mapFromItem(loginButton, 0, 0).y
-    onHeightChanged: visibleBoundary = mapFromItem(loginButton, 0, 0).y + loginButton.height + Kirigami.Units.smallSpacing
+    width: 1600
+    height: 900
 
-    property real fontSize: Kirigami.Theme.defaultFont.pointSize
+    property string notificationMessage
 
-    signal loginRequest(string username, string password)
+    LayoutMirroring.enabled: Application.layoutDirection === Qt.RightToLeft
+    LayoutMirroring.childrenInherit: true
 
-    onShowUsernamePromptChanged: {
-        if (!showUsernamePrompt) {
-            lastUserName = ""
+    KeyboardIndicator.KeyState {
+        id: capsLockState
+        key: Qt.Key_CapsLock
+    }
+
+    Item {
+        id: wallpaper
+        anchors.fill: parent
+        Repeater {
+            model: screenModel
+
+            Background {
+                x: geometry.x; y: geometry.y; width: geometry.width; height: geometry.height
+                sceneBackgroundType: config.type
+                sceneBackgroundColor: config.color
+                sceneBackgroundImage: config.background
+            }
         }
     }
 
-    onUserSelected: {
-        // Don't startLogin() here, because the signal is connected to the
-        // Escape key as well, for which it wouldn't make sense to trigger
-        // login.
-        passwordBox.clear()
-        focusFirstVisibleFormControl();
+    RejectPasswordAnimation {
+        id: rejectPasswordAnimation
+        target: mainStack
     }
 
-    QQC2.StackView.onActivating: {
-        // Controls are not visible yet.
-        Qt.callLater(focusFirstVisibleFormControl);
-    }
+    MouseArea {
+        id: loginScreenRoot
+        anchors.fill: parent
 
-    function focusFirstVisibleFormControl() {
-        const nextControl = (userNameInput.visible
-            ? userNameInput
-            : (passwordBox.visible
-                ? passwordBox
-                : loginButton));
-        // Using TabFocusReason, so that the loginButton gets the visual highlight.
-        nextControl.forceActiveFocus(Qt.TabFocusReason);
-    }
+        property bool uiVisible: true
+        property bool blockUI: mainStack.depth > 1 || userListComponent.mainPasswordBox.text.length > 0 || inputPanel.keyboardActive || config.type !== "image"
 
-    /*
-     * Login has been requested with the following username and password
-     * If username field is visible, it will be taken from that, otherwise from the "name" property of the currentIndex
-     */
-    function startLogin() {
-        const username = showUsernamePrompt ? userNameInput.text : userList.selectedUser
-        const password = passwordBox.text
+        hoverEnabled: true
+        drag.filterChildren: true
+        onPressed: uiVisible = true;
+        onPositionChanged: uiVisible = true;
+        onUiVisibleChanged: {
+            if (blockUI) {
+                fadeoutTimer.running = false;
+            } else if (uiVisible) {
+                fadeoutTimer.restart();
+            }
+        }
+        onBlockUIChanged: {
+            if (blockUI) {
+                fadeoutTimer.running = false;
+                uiVisible = true;
+            } else {
+                fadeoutTimer.restart();
+            }
+        }
 
-        footer.enabled = false
-        mainStack.enabled = false
-        userListComponent.userList.opacity = 0.75
+        Keys.onPressed: event => {
+            uiVisible = true;
+            event.accepted = false;
+        }
 
-        // This is partly because it looks nicer, but more importantly it
-        // works round a Qt bug that can trigger if the app is closed with a
-        // TextField focused.
+        //takes one full minute for the ui to disappear
+        Timer {
+            id: fadeoutTimer
+            running: true
+            interval: 60000
+            onTriggered: {
+                if (!loginScreenRoot.blockUI) {
+                    userListComponent.mainPasswordBox.showPassword = false;
+                    loginScreenRoot.uiVisible = false;
+                }
+            }
+        }
+        WallpaperFader {
+            visible: config.type === "image"
+            anchors.fill: parent
+            state: loginScreenRoot.uiVisible ? "on" : "off"
+            source: wallpaper
+            mainStack: mainStack
+            footer: footer
+            clock: clock
+        }
+
+        DropShadow {
+            id: clockShadow
+            anchors.fill: clock
+            source: clock
+            visible: !softwareRendering && config.showClock === "true"
+            radius: 7
+            verticalOffset: 0.8
+            samples: 15
+            spread: 0.2
+            color : Qt.rgba(0, 0, 0, 0.7)
+            opacity: loginScreenRoot.uiVisible ? 0 : 1
+            Behavior on opacity {
+                OpacityAnimator {
+                    duration: Kirigami.Units.veryLongDuration * 2
+                    easing.type: Easing.InOutQuad
+                }
+            }
+        }
+
+        Clock {
+            id: clock
+            property Item shadow: clockShadow
+            visible: y > 0 && config.showClock === "true"
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: (userListComponent.userList.y + mainStack.y)/2 - height/2
+            Layout.alignment: Qt.AlignBaseline
+        }
+
+        QQC2.StackView {
+            id: mainStack
+            anchors {
+                left: parent.left
+                right: parent.right
+            }
+            height: root.height + Kirigami.Units.gridUnit * 3
+
+            // this isn't implicit, otherwise items still get processed for the scenegraph
+            visible: opacity > 0
+
+            // If true (depends on the style and environment variables), hover events are always accepted
+            // and propagation stopped. This means the parent MouseArea won't get them and the UI won't be shown.
+            // Disable capturing those events while the UI is hidden to avoid that, while still passing events otherwise.
+            // One issue is that while the UI is visible, mouse activity won't keep resetting the timer, but when it
+            // finally expires, the next event should immediately set uiVisible = true again.
+            hoverEnabled: loginScreenRoot.uiVisible ? undefined : false
+
+            focus: true //StackView is an implicit focus scope, so we need to give this focus so the item inside will have it
+
+            Timer {
+                //SDDM has a bug in 0.13 where even though we set the focus on the right item within the window, the window doesn't have focus
+                //it is fixed in 6d5b36b28907b16280ff78995fef764bb0c573db which will be 0.14
+                //we need to call "window->activate()" *After* it's been shown. We can't control that in QML so we use a shoddy timer
+                //it's been this way for all Plasma 5.x without a huge problem
+                running: true
+                repeat: false
+                interval: 200
+                onTriggered: mainStack.forceActiveFocus()
+            }
+
+            initialItem: Login {
+                id: userListComponent
+                userListModel: userModel
+                loginScreenUiVisible: loginScreenRoot.uiVisible
+                userListCurrentIndex: userModel.lastIndex >= 0 ? userModel.lastIndex : 0
+                lastUserName: userModel.lastUser
+                showUserList: {
+                    if (!userListModel.hasOwnProperty("count")
+                        || !userListModel.hasOwnProperty("disableAvatarsThreshold")) {
+                        return false
+                    }
+
+                    if (userListModel.count === 0 ) {
+                        return false
+                    }
+
+                    if (userListModel.hasOwnProperty("containsAllUsers") && !userListModel.containsAllUsers) {
+                        return false
+                    }
+
+                    return userListModel.count <= userListModel.disableAvatarsThreshold
+                }
+
+                notificationMessage: {
+                    const parts = [];
+                    if (capsLockState.locked) {
+                        parts.push(i18ndc("plasma-desktop-sddm-theme", "@info:status",  "Caps Lock is on"));
+                    }
+                    if (root.notificationMessage) {
+                        parts.push(root.notificationMessage);
+                    }
+                    return parts.join(" • ");
+                }
+
+                actionItemsVisible: !inputPanel.keyboardActive
+                actionItems: [
+                    ActionButton {
+                        icon.name: "system-hibernate"
+                        text: i18ndc("plasma-desktop-sddm-theme", "Suspend to disk", "Hibernate")
+                        onClicked: sddm.hibernate()
+                        enabled: sddm.canHibernate
+                    },
+                    ActionButton {
+                        icon.name: "system-suspend"
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button Suspend to RAM", "Sleep")
+                        onClicked: sddm.suspend()
+                        enabled: sddm.canSuspend
+                    },
+                    ActionButton {
+                        icon.name: "system-reboot"
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "Restart")
+                        onClicked: sddm.reboot()
+                        enabled: sddm.canReboot
+                    },
+                    ActionButton {
+                        icon.name: "system-shutdown"
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "Shut Down")
+                        onClicked: sddm.powerOff()
+                        enabled: sddm.canPowerOff
+                    },
+                    ActionButton {
+                        icon.name: "system-user-prompt"
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button For switching to a username and password prompt", "Other…")
+                        onClicked: mainStack.push(userPromptComponent)
+                        visible: !userListComponent.showUsernamePrompt
+                    }]
+
+                onLoginRequest: {
+                    root.notificationMessage = ""
+                    sddm.login(username, password, sessionButton.currentIndex)
+                }
+            }
+
+            Behavior on opacity {
+                OpacityAnimator {
+                    duration: Kirigami.Units.longDuration
+                }
+            }
+
+            readonly property real zoomFactor: 1.5
+
+            popEnter: Transition {
+                ScaleAnimator {
+                    from: mainStack.zoomFactor
+                    to: 1
+                    duration: Kirigami.Units.veryLongDuration
+                    easing.type: Easing.OutCubic
+                }
+                OpacityAnimator {
+                    from: 0
+                    to: 1
+                    duration: Kirigami.Units.veryLongDuration
+                    easing.type: Easing.OutCubic
+                }
+            }
+
+            popExit: Transition {
+                ScaleAnimator {
+                    from: 1
+                    to: 1 / mainStack.zoomFactor
+                    duration: Kirigami.Units.veryLongDuration
+                    easing.type: Easing.OutCubic
+                }
+                OpacityAnimator {
+                    from: 1
+                    to: 0
+                    duration: Kirigami.Units.veryLongDuration
+                    easing.type: Easing.OutCubic
+                }
+            }
+
+            pushEnter: Transition {
+                ScaleAnimator {
+                    from: 1 / mainStack.zoomFactor
+                    to: 1
+                    duration: Kirigami.Units.veryLongDuration
+                    easing.type: Easing.OutCubic
+                }
+                OpacityAnimator {
+                    from: 0
+                    to: 1
+                    duration: Kirigami.Units.veryLongDuration
+                    easing.type: Easing.OutCubic
+                }
+            }
+
+            pushExit: Transition {
+                ScaleAnimator {
+                    from: 1
+                    to: mainStack.zoomFactor
+                    duration: Kirigami.Units.veryLongDuration
+                    easing.type: Easing.OutCubic
+                }
+                OpacityAnimator {
+                    from: 1
+                    to: 0
+                    duration: Kirigami.Units.veryLongDuration
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+
+        VirtualKeyboardLoader {
+            id: inputPanel
+
+            z: 1
+
+            screenRoot: root
+            mainStack: mainStack
+            mainBlock: userListComponent
+            passwordField: userListComponent.mainPasswordBox
+        }
+
+        Component {
+            id: userPromptComponent
+            Login {
+                showUsernamePrompt: true
+                notificationMessage: root.notificationMessage
+                loginScreenUiVisible: loginScreenRoot.uiVisible
+                fontSize: Kirigami.Theme.defaultFont.pointSize + 2
+
+                // using a model rather than a QObject list to avoid QTBUG-75900
+                userListModel: ListModel {
+                    ListElement {
+                        name: ""
+                        icon: ""
+                    }
+                    Component.onCompleted: {
+                        // as we can't bind inside ListElement
+                        setProperty(0, "name", i18ndc("plasma-desktop-sddm-theme", "@info:usagetip", "Type in Username and Password"));
+                        setProperty(0, "icon", Qt.resolvedUrl("faces/.face.icon"))
+                    }
+                }
+
+                onLoginRequest: {
+                    root.notificationMessage = ""
+                    sddm.login(username, password, sessionButton.currentIndex)
+                }
+
+                actionItemsVisible: !inputPanel.keyboardActive
+                actionItems: [
+                    ActionButton {
+                        icon.name: "system-suspend"
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button Suspend to RAM", "Sleep")
+                        onClicked: sddm.suspend()
+                        enabled: sddm.canSuspend
+                    },
+                    ActionButton {
+                        icon.name: "system-reboot"
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "Restart")
+                        onClicked: sddm.reboot()
+                        enabled: sddm.canReboot
+                    },
+                    ActionButton {
+                        icon.name: "system-shutdown"
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "Shut Down")
+                        onClicked: sddm.powerOff()
+                        enabled: sddm.canPowerOff
+                    },
+                    ActionButton {
+                        icon.name: "system-user-list"
+                        text: i18ndc("plasma-desktop-sddm-theme", "@action:button", "List Users")
+                        onClicked: mainStack.pop()
+                    }
+                ]
+            }
+        }
+
+        DropShadow {
+            id: logoShadow
+            anchors.fill: logo
+            source: logo
+            visible: !softwareRendering && config.showlogo === "shown"
+            horizontalOffset: 1
+            verticalOffset: 1
+            radius: 6
+            samples: 14
+            spread: 0.3
+            color : "black" // shadows should always be black
+            opacity: loginScreenRoot.uiVisible ? 0 : 1
+            Behavior on opacity {
+                //OpacityAnimator when starting from 0 is buggy (it shows one frame with opacity 1)"
+                NumberAnimation {
+                    duration: Kirigami.Units.longDuration
+                    easing.type: Easing.InOutQuad
+                }
+            }
+        }
+
+        Image {
+            id: logo
+            visible: config.showlogo === "shown"
+            source: config.logo
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: footer.top
+            anchors.bottomMargin: Kirigami.Units.largeSpacing
+            asynchronous: true
+            sourceSize.height: height
+            opacity: loginScreenRoot.uiVisible ? 0 : 1
+            fillMode: Image.PreserveAspectFit
+            height: Math.round(Kirigami.Units.gridUnit * 3.5)
+            Behavior on opacity {
+                // OpacityAnimator when starting from 0 is buggy (it shows one frame with opacity 1)"
+                NumberAnimation {
+                    duration: Kirigami.Units.longDuration
+                    easing.type: Easing.InOutQuad
+                }
+            }
+        }
+
+        // Note: Containment masks stretch clickable area of their buttons to
+        // the screen edges, essentially making them adhere to Fitts's law.
+        // Due to virtual keyboard button having an icon, buttons may have
+        // different heights, so fillHeight is required.
         //
-        // See https://bugreports.qt.io/browse/QTBUG-55460
-        loginButton.forceActiveFocus();
-        loginRequest(username, password);
-    }
-
-    PlasmaComponents3.TextField {
-        id: userNameInput
-        font.pointSize: fontSize + 1
-        Layout.fillWidth: true
-
-        text: lastUserName
-        visible: showUsernamePrompt
-        focus: showUsernamePrompt && !lastUserName //if there's a username prompt it gets focus first, otherwise password does
-        placeholderText: i18ndc("plasma-desktop-sddm-theme", "@info:placeholder in textfield", "Username")
-
-        onAccepted: {
-            if (root.loginScreenUiVisible) {
-                passwordBox.forceActiveFocus()
+        // Note for contributors: Keep this in sync with LockScreenUi.qml footer.
+        RowLayout {
+            id: footer
+            anchors {
+                bottom: parent.bottom
+                left: parent.left
+                right: parent.right
+                margins: Kirigami.Units.smallSpacing
             }
+            spacing: Kirigami.Units.smallSpacing
+
+            Behavior on opacity {
+                OpacityAnimator {
+                    duration: Kirigami.Units.longDuration
+                }
+            }
+
+            PlasmaComponents3.ToolButton {
+                id: virtualKeyboardButton
+
+                text: i18ndc("plasma-desktop-sddm-theme", "Button to show/hide virtual keyboard", "Virtual Keyboard")
+                icon.name: inputPanel.keyboardActive ? "input-keyboard-virtual-on" : "input-keyboard-virtual-off"
+                onClicked: {
+                    // Otherwise the password field loses focus and virtual keyboard
+                    // keystrokes get eaten
+                    userListComponent.mainPasswordBox.forceActiveFocus();
+                    inputPanel.showHide()
+                }
+                visible: inputPanel.status === Loader.Ready
+
+                Layout.fillHeight: true
+                containmentMask: Item {
+                    parent: virtualKeyboardButton
+                    anchors.fill: parent
+                    anchors.leftMargin: -footer.anchors.margins
+                    anchors.bottomMargin: -footer.anchors.margins
+                }
+            }
+
+            KeyboardButton {
+                id: keyboardButton
+
+                onKeyboardLayoutChanged: {
+                    // Otherwise the password field loses focus and virtual keyboard
+                    // keystrokes get eaten
+                    userListComponent.mainPasswordBox.forceActiveFocus();
+                }
+
+                Layout.fillHeight: true
+                containmentMask: Item {
+                    parent: keyboardButton
+                    anchors.fill: parent
+                    anchors.leftMargin: virtualKeyboardButton.visible ? 0 : -footer.anchors.margins
+                    anchors.bottomMargin: -footer.anchors.margins
+                }
+            }
+
+            SessionButton {
+                id: sessionButton
+
+                onSessionChanged: {
+                    // Otherwise the password field loses focus and virtual keyboard
+                    // keystrokes get eaten
+                    userListComponent.mainPasswordBox.forceActiveFocus();
+                }
+
+                Layout.fillHeight: true
+                containmentMask: Item {
+                    parent: sessionButton
+                    anchors.fill: parent
+                    anchors.leftMargin: virtualKeyboardButton.visible || keyboardButton.visible
+                        ? 0 : -footer.anchors.margins
+                    anchors.bottomMargin: -footer.anchors.margins
+                }
+            }
+
+            Item {
+                Layout.fillWidth: true
+            }
+
+            Battery {}
         }
     }
 
-    RowLayout {
-        Layout.fillWidth: true
-
-        PlasmaExtras.PasswordField {
-            id: passwordBox
-            font.pointSize: fontSize + 1
-            Layout.fillWidth: true
-
-            placeholderText: i18ndc("plasma-desktop-sddm-theme",  "@info:placeholder in textfield", "Password")
-            focus: !showUsernamePrompt || lastUserName
-
-            // Disable reveal password action because SDDM does not have the breeze icon set loaded
-            rightActions: []
-
-            onAccepted: {
-                if (root.loginScreenUiVisible) {
-                    startLogin();
-                }
-            }
-
-            visible: root.showUsernamePrompt || userList.currentItem.needsPassword
-
-            Keys.onEscapePressed: {
-                mainStack.currentItem.forceActiveFocus();
-            }
-
-            //if empty and left or right is pressed change selection in user switch
-            //this cannot be in keys.onLeftPressed as then it doesn't reach the password box
-            Keys.onPressed: event => {
-                if (event.key === Qt.Key_Left && !text) {
-                    userList.decrementCurrentIndex();
-                    event.accepted = true
-                }
-                if (event.key === Qt.Key_Right && !text) {
-                    userList.incrementCurrentIndex();
-                    event.accepted = true
-                }
-            }
-
-            Connections {
-                target: sddm
-                function onLoginFailed() {
-                    passwordBox.selectAll()
-                    passwordBox.forceActiveFocus()
-                }
-            }
+    Connections {
+        target: sddm
+        function onLoginFailed() {
+            notificationMessage = i18ndc("plasma-desktop-sddm-theme", "@info:status", "Login Failed")
+            footer.enabled = true
+            mainStack.enabled = true
+            userListComponent.userList.opacity = 1
+            rejectPasswordAnimation.start()
         }
-
-        PlasmaComponents3.Button {
-            id: loginButton
-            Accessible.name: i18ndc("plasma-desktop-sddm-theme", "@action:button Accessible name", "Log in")
-            Layout.preferredHeight: passwordBox.implicitHeight
-            Layout.preferredWidth: text.length === 0 ? loginButton.Layout.preferredHeight : -1
-
-            icon.name: text.length === 0 ? (root.LayoutMirroring.enabled ? "go-previous" : "go-next") : ""
-
-            text: root.showUsernamePrompt || userList.currentItem.needsPassword ? "" : i18nc("@action:button", "Log In")
-            onClicked: startLogin()
-            Keys.onEnterPressed: clicked()
-            Keys.onReturnPressed: clicked()
+        function onLoginSucceeded() {
+            //note SDDM will kill the greeter at some random point after this
+            //there is no certainty any transition will finish, it depends on the time it
+            //takes to complete the init
+            mainStack.opacity = 0
+            footer.opacity = 0
         }
+    }
+
+    onNotificationMessageChanged: {
+        if (notificationMessage) {
+            notificationResetTimer.start();
+        }
+    }
+
+    Timer {
+        id: notificationResetTimer
+        interval: 3000
+        onTriggered: notificationMessage = ""
     }
 }
